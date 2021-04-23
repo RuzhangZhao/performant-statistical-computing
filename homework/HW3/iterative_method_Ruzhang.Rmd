@@ -1,0 +1,88 @@
+---
+title: 'Homework: iterative method'
+author: "Ruzhang Zhao"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include = FALSE}
+source(file.path("..", "R", "util.R"))
+required_packages <- c('RSpectra','tidyverse','testit')
+install_and_load_packages(required_packages)
+```
+
+# Problem 1
+Auto regressive processes can be viewed as a discrete analog of Ornstein–Uhlenbeck process &mdash; which coincides with Gaussian process based on an exponential covariance matrix &mdash; and hence is an example of Gaussian Markov random fields.
+For instance, stationary lag-1 auto-regressive process 
+$$x_t = \phi x_{t - 1} + \sqrt{1 - \phi^2} \, \epsilon_t, 
+  \quad x_0 \sim \mathcal{N}(0, 1), 
+  \quad \epsilon_t \mathbin{\overset{\small \textrm{i.i.d.}}{\sim}} \mathcal{N}(0, 1)$$
+has the _tri-diagonal_ precision matrix
+$$\boldsymbol{\Sigma}^{-1} = \frac{1}{1 - \phi^2} 
+  \begin{bmatrix} 
+  1 & -\phi & 0 & & & \ldots & 0 \\
+  -\phi & 1 + \phi^2 & -\phi & 0 & & & \vdots \\
+  0 & -\phi & 1 + \phi^2 & -\phi & 0 & & \\
+    & & \ddots & \ddots & \ddots & & \\
+    & & 0 & -\phi & 1 + \phi^2 & -\phi & 0 \\
+  \vdots & &   & 0 & -\phi & 1 + \phi^2 & -\phi \\
+  0 & \ldots &   &   & 0 & -\phi & 1\\
+  \end{bmatrix}.$$
+More generally, a lag-$k$ (non-stationary) auto-regressive process has a _banded_ precision matrix with bandwidth $k$.
+
+Implement a fast matrix-vector $\boldsymbol{v} \to \boldsymbol{\Sigma}^{-1} \boldsymbol{v}$ operation, exploiting the structure of the AR-1 precision matrix.
+Then use this function to find the top 10 principal components of $\boldsymbol{\Sigma}$ (not $\boldsymbol{\Sigma}^{-1}$) via Lanczos algorithm provided via `RSpectra::eigs_sym`.
+
+### `RSpectra::eigs_sym` is used to calculate 10 smallest eigenvalues of $\boldsymbol{\Sigma}^{-1}$, and their inverse are corresponding to the top 10 eigenvalues of $\boldsymbol{\Sigma}$.
+```{r}
+ar_length <- 4096
+auto_corr <- .9 # Corresponds to `\phi` above
+
+ar_precision_matvec <- function(v, auto_corr) {
+  # Fill in: note that you can vectorize the calculation and do *not* need a for-loop. 
+  # (Hint: how would you efficiently carry out a matrix-vector operation if the matrix has non-zero entries only along the sub or super diagonal?)
+  p<- auto_corr
+  n_v <- length(v)
+  v_1n<-c((cbind(v[1:(n_v-2)],v[2:(n_v-1)], v[3:n_v])%*%c(-p,1+p^2,-p)))
+  1/(1-p^2)*c(v[1]-p*v[2],v_1n,-p*v[n_v-1]+v[n_v])
+}
+
+ar_eig <- eigs_sym(
+  A = ar_precision_matvec, args = auto_corr,
+  # Fill in
+  n = ar_length,
+  k=10,
+  which = 'SM',
+  opts = list(
+    ncv = 100, # Spectrum distribution of AR-1 process is not very spread out on the extreme ends and is actually a hard case for Lanczos. So it helps to have more Lanczos vectors than the default for faster convergence.
+    maxitr = 10^3, # Cap it just in case
+    retvec = TRUE # More efficient to do without eigenvectors when not needed
+  ),
+)
+```
+
+Now, directly compute the eigen decomposition of $\boldsymbol{\Sigma}$ (not $\boldsymbol{\Sigma}^{-1}$) and compare its output with the principal components and associated variances found via Lancsoz algorithm.
+
+### The direct_method function can be used to calculate the cov matrix for AR-1. For the comparison, we can use the results are close. 
+```{r}
+# Fill in
+direct_method<-function(n = ar_length,p = auto_corr,k = 10){
+  sig<-sapply(1:n, function(i){
+    p^abs(i-c(1:n))
+  })
+  res<- eigen(sig)
+  res_vec<-res$vectors[,1:k]
+  res_val <- res$values[1:k]
+  return(list(val = res_val, vec = res_vec))
+}
+res<-direct_method()
+sum((res$val - 1/ar_eig$values[10:1])^2)
+sum((abs(res$vec) - abs(ar_eig$vectors[,10:1]))^2)
+```
+
+**Remark:** 
+For banded matrices, there actually are even more efficient approaches.
+To get a sense of special routines available for banded matrices, you can take a look at `*_banded` functions in [SciPy's linear algebra routines](https://docs.scipy.org/doc/scipy/reference/linalg.html).
+Even those functions represent only a subset of available numerical linear algebra techniques; see
+[LAPACK documentation for SVD](https://www.netlib.org/lapack/lug/node32.html) for example.
